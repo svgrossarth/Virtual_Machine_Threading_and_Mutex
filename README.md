@@ -1,2 +1,2 @@
 # Virtual Machine Threading and Mutex API
-This was a school project that a partner and I built. With this API the apps run in the apps folder on a virtual using the API we made.
+A project for an operating systems class that a partner and I worked on on through out the quarter. 
