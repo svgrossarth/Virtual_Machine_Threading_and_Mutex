@@ -87,12 +87,15 @@ void changeMuxOwner(TVMMutexID mutex, TVMThreadID myTurn);
 
 void pushThreadToCorrectQ(TVMThreadID idPushing);
 
+/* The idle thread. This thread is to run only when there are no other threads or all other threads are waiting.*/
 void VMIdleThread( void * param){
     MachineEnableSignals();
     ////cout << "\nIdle Thread Is Running!!!\n";
     while(true);
 }
 
+/*Once the new thread to be run is determined a context switch happens here so the new thread will become
+ * the current thread.*/
 void Dispatcher(TVMThreadID newThreadId){
     //cout << "\nDispatcher has been entered\n";
     TVMThreadID oldThread = CurThreadID;
@@ -105,13 +108,16 @@ void Dispatcher(TVMThreadID newThreadId){
 }
 
 
-
+/* When a it is time for a new thread to be scheduled the current thread is compared to theads in the different queues.
+ * If the current thread is running and a thread with a higher or equal priority is found then the current thread will
+ * be put at the  end of the appropriate queue and the new thread will be scheduled. If the current thread isn't running
+ * and no other thread is in any queue then the idle thread will run.*/
 void VMSchedule(){
-    //cout << "\nScheduler has been entered. By the way, the ready queue contains: " << HighPriorityQ.size() << " " << MedPriorityQ.size() << " " << LowPriorityQ.size() << "\n";
-    //cout << "the current thread that is running right now is " << CurThreadID << " and its priority is " << TCBList[CurThreadID].prio << endl;
     TVMThreadID currId = CurThreadID;
+    /*Checks if thread is currently running.*/
     if(TCBList[currId].state == VM_THREAD_STATE_RUNNING){
-        ////cout << "\nScheduling from a running thread\n";
+
+        /*High Priority*/
         if(!HighPriorityQ.empty()){
             TVMThreadID next_thread = HighPriorityQ.front();
             HighPriorityQ.pop();
@@ -121,18 +127,19 @@ void VMSchedule(){
             }
             Dispatcher(next_thread);
         }
+
+        /*Medium Priority*/
         else if(TCBList[currId].prio < VM_THREAD_PRIORITY_HIGH && !MedPriorityQ.empty()){
             TVMThreadID next_thread = MedPriorityQ.front();
-            ////cout << "\nOld ready queue contains: " << HighPriorityQ.size() << " " << MedPriorityQ.size() << " " << LowPriorityQ.size() << "\n";
-            ////cout << "\nPOPPING " << MedPriorityQ.front() << "\n";
             MedPriorityQ.pop();
-            ////cout << "\nNew ready queue contains: " << HighPriorityQ.size() << " " << MedPriorityQ.size() << " " << LowPriorityQ.size() << "\n";
             TCBList[currId].state = VM_THREAD_STATE_READY;
             if(currId != 0){
               pushThreadToCorrectQ(currId); //this was push to medQ
             }
             Dispatcher(next_thread);
         }
+
+        /*Low Priority*/
         else if(TCBList[currId].prio < VM_THREAD_PRIORITY_NORMAL && !LowPriorityQ.empty()){
             TVMThreadID next_thread = LowPriorityQ.front();
             LowPriorityQ.pop();
@@ -143,63 +150,70 @@ void VMSchedule(){
             Dispatcher(next_thread);
         }
     }
+
+    /*If thread is not running and thread is found then idle thread will run next.*/
     else{
-        ////cout << "\nScheduling from a NON-running thread\n";
+
+        /*High Priority*/
         if(!HighPriorityQ.empty()){
             TVMThreadID next_thread = HighPriorityQ.front();
             HighPriorityQ.pop();
             Dispatcher(next_thread);
         }
+
+        /*Medium Priority*/
         else if(!MedPriorityQ.empty()){
             TVMThreadID next_thread = MedPriorityQ.front();
-            ////cout << "\nOld ready queue contains: " << HighPriorityQ.size() << " " << MedPriorityQ.size() << " " << LowPriorityQ.size() << "\n";
-            ////cout << "\nPOPPING " << MedPriorityQ.front() << "\n";
             MedPriorityQ.pop();
-            ////cout << "\nNew ready queue contains: " << HighPriorityQ.size() << " " << MedPriorityQ.size() << " " << LowPriorityQ.size() << "\n";
             Dispatcher(next_thread);
         }
+
+        /*Low Priority*/
         else if(!LowPriorityQ.empty()){
             TVMThreadID next_thread = LowPriorityQ.front();
             LowPriorityQ.pop();
             Dispatcher(next_thread);
         }
+
+        /*Idel thread*/
         else{
-            Dispatcher(0); //Idle thread
+            Dispatcher(0);
         }
     }
 
 }
 
+
+/*Pushes the thread to the correct Queue based on its priority.*/
 void pushThreadToCorrectQ(TVMThreadID idPushing){
     if(TCBList[idPushing].prio == VM_THREAD_PRIORITY_HIGH){
-        ////cout << "Adding a new high priority thread\n";
         HighPriorityQ.push(idPushing);
     }
     else if(TCBList[idPushing].prio == VM_THREAD_PRIORITY_NORMAL){
-        ////cout << "Adding a new normal priority thread\n";
         MedPriorityQ.push(idPushing);
     }
     else if(idPushing != 0){
-        ////cout << "Adding a new low priority thread\n";
         LowPriorityQ.push(idPushing);
     }
 
 }
 
+
+/* Once the alarm has gone off, once each tick, there will be a check to see if any of
+ * the sleeping threads to need to be woken up. Then the scheduler will be called. */
 void AlarmCallback(void * param){
     TMachineSignalState sigState;
     MachineSuspendSignals(&sigState);
-    ////cout << "\n!!!Alarm!!!\n";
     tickCount++;
+
+    /*Checking for to see if any threads want to be worken up.*/
     for(unsigned int i = 0; i < SleepyThreads.size(); i++){
-        ////cout << "\nSleepy threads currently has " << SleepyThreads.size() <<" members\n";
         TCBList[SleepyThreads[i]].sleepTicks--;
         if(TCBList[SleepyThreads[i]].sleepTicks == 0){
             TCBList[SleepyThreads[i]].state = VM_THREAD_STATE_READY;
             pushThreadToCorrectQ(SleepyThreads[i]);
             SleepyThreads.erase(SleepyThreads.begin() + i);
             i--; //Decrement i since we lose a member
-            ////cout << "\nLost a sleepy thread!\nSleepy thread now has " << SleepyThreads.size() <<" members\n";
         }
     }
     VMSchedule();
@@ -208,13 +222,12 @@ void AlarmCallback(void * param){
 
 
 
-void IOCallback (void *calldata, int result){ //IS THIS SUPPOSED TO BE VOID?
+/* After IO call has finished the data is recieved and the waiting thread is put to ready
+ * and the scheduler is called to schedule a new thread.*/
+void IOCallback (void *calldata, int result){
     TMachineSignalState sigState;
     MachineSuspendSignals(&sigState);
-    //cout << "\nIOCallback has been entered\n";
     int IOThreadID = *((int *)calldata);
-    //cout << "IOCallback: the current thread that is running right now is " << CurThreadID << endl;
-    //cout << "IOCallback: the thread that this is a call back function for is " << IOThreadID << endl;
     TCBList[IOThreadID].state = VM_THREAD_STATE_READY;
     pushThreadToCorrectQ(IOThreadID);
     TCBList[IOThreadID].retVal = result;
@@ -222,15 +235,21 @@ void IOCallback (void *calldata, int result){ //IS THIS SUPPOSED TO BE VOID?
     MachineResumeSignals(&sigState);
 }
 
+
+/* When a new thread starts, it goes here first so that there is a container around the
+ * function the thread will be running. This allows us to terminate the thread once it does executing
+ * its function.*/
 void skeleton(void *param){
-    ////cout << "\nSkeleton has been entered\n";
     MachineEnableSignals();
     int threadID = *((int *)param);
     TCBList[threadID].entry(TCBList[threadID].param);
     VMThreadTerminate(threadID);
 }
 
+
+/*The virtual machine first starts up here.*/
 TVMStatus VMStart(int tickms, TVMMemorySize heapsize, TVMMemorySize sharedsize, int argc, char *argv[]){
+    /*Initialzing ticks*/
     tickCount = 0;
     tickDur = tickms;
     TVMMainEntry VMMain = VMLoadModule(argv[0]);
@@ -238,39 +257,36 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize, TVMMemorySize sharedsize, 
         return VM_STATUS_FAILURE;
     }
 
+    /*Initialzing heap and shared memory*/
     VMHeapSize = heapsize;
     VMSharedSize = sharedsize;
     vector<MemoryChunk> sharedList;
-    ////cout << "VM Start says that there are " << sharedsize << " bytes in shared memory and " << heapsize << " bytes in heap\n";
     SharedPool = {0, MachineInitialize(sharedsize), sharedsize, sharedList}; // Pool id 0 is the shared space (NOT on global list of pools)
     MemoryPoolList.push_back(SharedPool);
     void * mainBase = malloc(heapsize);
     TVMMemoryPoolID mainID = VM_MEMORY_POOL_ID_SYSTEM;
     VMMemoryPoolCreate(mainBase, heapsize, &mainID);
 
+    /*Creatings mutex queues*/
     queue<TVMThreadID> highMuxQ;
     queue<TVMThreadID> medMuxQ;
     queue<TVMThreadID> lowMuxQ;
     sharedLock = {0, 0, false, highMuxQ, medMuxQ, lowMuxQ, false};
 
+    /*Initializings and activates idle thread the TCB for the main thread.*/
     TVMThreadID VMIdleThreadId = 0;
     TVMThreadID VMMainThreadId = 1;
-
     VMThreadCreate(VMIdleThread, NULL, 6400000, 0, &VMIdleThreadId);
     VMThreadActivate(VMIdleThreadId);
-
-    //SMachineContext mainCont;
-
     TCB TCBMain = {VMMainThreadId, NULL, NULL, NULL, 0, 0, VM_THREAD_STATE_RUNNING, VM_THREAD_PRIORITY_NORMAL, 0, 0};
     TCBMain.prio = VM_THREAD_PRIORITY_NORMAL;
     TCBList.push_back(TCBMain);
-
     CurThreadID = 1;
 
-    ////cout << "START: the current thread that is running right now is " << CurThreadID << endl;
-
+    /*Sets up the alarm*/
     MachineRequestAlarm(tickms*1000, AlarmCallback, NULL);
     MachineEnableSignals();
+
 
     VMMain(argc, argv);
     VMUnloadModule();
@@ -280,6 +296,8 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize, TVMMemorySize sharedsize, 
 }
 
 
+/*Opens a file and causes the current thread to wait for a callback till when the file is opened.
+ * A new thread is scheduled.*/
 TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescriptor){
     TMachineSignalState sigState;
     MachineSuspendSignals(&sigState);
@@ -290,9 +308,7 @@ TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescrip
     else{
         int IOThreadID = CurThreadID;
         TCBList[IOThreadID].state = VM_THREAD_STATE_WAITING;
-
         MachineFileOpen(filename, flags, mode, IOCallback, &IOThreadID);
-
         VMSchedule();
         *filedescriptor = TCBList[IOThreadID].retVal;
         if(*filedescriptor < 0){
@@ -306,6 +322,9 @@ TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescrip
     }
 }
 
+
+/*Seeks with a already opened file and causes the current thread to wait for a callback till when the seeking is over.
+ * A new thread is scheduled.*/
 TVMStatus VMFileSeek(int filedescriptor, int offset, int whence, int *newoffset){
     TMachineSignalState sigState;
     MachineSuspendSignals(&sigState);
@@ -324,6 +343,9 @@ TVMStatus VMFileSeek(int filedescriptor, int offset, int whence, int *newoffset)
     }
 }
 
+
+/* Reads from an already opened file. If there is room in the shared memory to read the file the current thread will wait for a callback
+ * till the reading is done. A new thread is scheduled.*/
 TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     TMachineSignalState sigState;
     MachineSuspendSignals(&sigState);
@@ -427,13 +449,12 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     }
 }
 
-
+/* Writes to an already opened file. If there is room in the shared memory to write to the file the current thread will wait for a callback
+ * till the writing is done. A new thread is scheduled.*/
 TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
     TMachineSignalState sigState;
     MachineSuspendSignals(&sigState);
 
-    //cout << "Thread " << CurThreadID << " is trying to write\n";
-    ////cout << "VMFileWrite has been entered\n";
     if(data == NULL || length == NULL){
         MachineResumeSignals(&sigState);
         return VM_STATUS_ERROR_INVALID_PARAMETER;
@@ -442,14 +463,6 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
         int IOThreadID = CurThreadID;
         TCBList[IOThreadID].state = VM_THREAD_STATE_WAITING;
         void *sharedBase;
-        ////cout << "Shared memory pool has " << SharedPool.size << " bytes\n";
-        ////cout << "Shared memory pool chunks: \n";
-        //for(unsigned int i = 0; i < SharedPool.memList.size(); i++){
-            ////cout << i << ": " << SharedPool.memList[i].size;
-        //}
-        //TVMMemorySize tempSize = 0;
-        //VMMemoryPoolQuery(0, &tempSize);
-        ////cout << "total free shared space is " << tempSize << "\n";
         if(sharedLock.locked){
             //cout << "sharedLock is locked\n";
             if(TCBList[CurThreadID].prio == VM_THREAD_PRIORITY_HIGH){
@@ -465,7 +478,6 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
             VMMemoryPoolAllocate(0, 512, &sharedBase);
         }
         else if(VMMemoryPoolAllocate(0, 512, &sharedBase) != VM_STATUS_SUCCESS) {
-            ////cout << "sharedLock is unlocked\n";
             sharedLock.locked = true;
             if(TCBList[CurThreadID].prio == VM_THREAD_PRIORITY_HIGH){
                 sharedLock.highMuxQ.push(CurThreadID);
@@ -482,18 +494,12 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
         int originalLength = *length;
         int bytesToWrite = *length;
         *length = 0;
-        ////cout << "Thread " << CurThreadID << " is ready to start writing\n";
         while(bytesToWrite > 0){
             if(bytesToWrite > 512){
                 memcpy(sharedBase, data, 512);
                 TCBList[IOThreadID].state = VM_THREAD_STATE_WAITING;
-                //cout << "Thread " << CurThreadID << " is trying to write" << 512 << " bytes to file\n";
-                //cout << "writing " << 512 << " bytes to file\n\n\n";
                 MachineFileWrite(filedescriptor, sharedBase, 512, IOCallback, &IOThreadID);
-                //cout << " About to enter the Scheduler I JUST called MachineFileWrite\n";
                 VMSchedule();
-                //cout << "\n\nThread " << CurThreadID << " is done writing " << TCBList[IOThreadID].retVal << " bytes to file\n";
-                //cout << "Done writing " << TCBList[IOThreadID].retVal << " bytes to file\n";
                 if(TCBList[IOThreadID].retVal < 0){
                     MachineResumeSignals(&sigState);
                     return VM_STATUS_FAILURE;
@@ -507,13 +513,8 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
             else{
                 memcpy(sharedBase, data, (size_t)bytesToWrite);
                 TCBList[IOThreadID].state = VM_THREAD_STATE_WAITING;
-                //cout << "Thread " << CurThreadID << " is trying to write " << bytesToWrite << " bytes to file\n";
-                //cout << "writing " << bytesToWrite << " bytes to file\n\n\n";
                 MachineFileWrite(filedescriptor, sharedBase, bytesToWrite, IOCallback, &IOThreadID);
-              //cout << " About to enter the Scheduler I JUST called MachineFileWrite\n";
                 VMSchedule();
-                //cout << "\n\nThread " << CurThreadID << " is done writing " << TCBList[IOThreadID].retVal << " bytes to file\n";
-                //cout << "Done writing " << TCBList[IOThreadID].retVal << " bytes to file\n";
                 if(TCBList[IOThreadID].retVal < 0){
                     MachineResumeSignals(&sigState);
                     return VM_STATUS_FAILURE;
@@ -526,19 +527,12 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
             }
         }
         data = (uint8_t *)data - originalLength;
-        //VMMemoryPoolQuery(0, &tempSize);
-       // ////cout << "total free shared space before deallocation is " << tempSize << "\n";
 
         VMMemoryPoolDeallocate(0, sharedBase);
-
-        //VMMemoryPoolQuery(0, &tempSize);
-        ////cout << "total free shared space after deallocation is " << tempSize << "\n";
         if(sharedLock.highMuxQ.empty() && sharedLock.medMuxQ.empty() && sharedLock.lowMuxQ.empty()){
-            ////cout << "Done writing, unlocking Shared Lock\n";
             sharedLock.locked = false;
         }
         else{
-            ////cout << "Done writing, giving away Shared Lock\n";
             if(!sharedLock.highMuxQ.empty()){
                 TCBList[sharedLock.highMuxQ.front()].state = VM_THREAD_STATE_READY;
                 pushThreadToCorrectQ(sharedLock.highMuxQ.front());
@@ -556,7 +550,6 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
             }
             VMSchedule();
         }
-        //cout << "Completely done writing!!!\n";
         MachineResumeSignals(&sigState);
         return VM_STATUS_SUCCESS;
     }
